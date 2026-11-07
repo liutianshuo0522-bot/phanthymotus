@@ -46,6 +46,22 @@ bench.yaml
 !docs/images/*.png
 !docs/images/*.jpg
 
+# ASR demo artifacts — the challenge repository must not contain files >1 MB.
+# Keep models, recordings, generated predictions and demo videos outside Git.
+*.onnx
+*.engine
+*.plan
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.mp4
+*.zip
+*.tar
+*.tar.bz2
+*.tar.gz
+asr-results/
+
 # Node.js
 node_modules/
 .next/

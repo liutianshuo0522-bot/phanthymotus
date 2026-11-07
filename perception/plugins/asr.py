@@ -658,7 +658,7 @@ TOOLS = [
                 # The two paraformers and zipformer-en were dropped for accuracy;
                 # REMOVED_ASR_MODELS maps a card still holding one onto its
                 # replacement rather than letting it fail to resolve.
-                "asr_model":     {"type": "string", "enum": ["x-asr-zh-en", "parakeet-en", "sensevoice-small"], "description": "ASR model (x-asr-zh-en = bilingual offline transducer with hotwords, parakeet-en = English offline CTC, noise-robust, sensevoice-small = multilingual offline)", "default": "sensevoice-small", "scope": "shared"},
+                "asr_model":     {"type": "string", "enum": ["zipformer-zh-14m", "x-asr-zh-en", "parakeet-en", "sensevoice-small"], "description": "ASR model (zipformer-zh-14m = compact Chinese CPU model for the ASR demo, x-asr-zh-en = bilingual offline transducer with hotwords, parakeet-en = English offline CTC, noise-robust, sensevoice-small = multilingual offline)", "default": "sensevoice-small", "scope": "shared"},
                 # Which weights each device loads is in ASR_MODELS; only models
                 # with a verified gpu entry list one, so x-show-when hides this
                 # field for the rest rather than offering a choice that would be
@@ -977,6 +977,91 @@ class SherpaOnnxNemoCtcAdapter(ASRAdapter):
         return result.text.strip(), {}, alignment
 
 
+class SherpaOnnxStreamingZipformerAdapter(ASRAdapter):
+    """Decode VAD utterances with the compact 14 M Chinese Zipformer.
+
+    The model is a *streaming* Transducer, so it must use OnlineRecognizer even
+    though this plugin hands the adapter a complete VAD segment.  Feeding the
+    segment, adding the tail required by sherpa-onnx, and then calling
+    ``input_finished`` is the official file-decoding path.  Treating these
+    weights as an OfflineRecognizer model can create a session that never emits
+    useful text, which is exactly the kind of silent failure the demo must avoid.
+
+    CPU int8 is intentional: it keeps the runtime weights around 30 MB and ASR
+    GPU utilisation near zero on Orin.  The decoder remains fp32, matching the
+    model author's documented int8 combination.
+    """
+
+    _ENCODER = "encoder-epoch-99-avg-1.int8.onnx"
+    _DECODER = "decoder-epoch-99-avg-1.onnx"
+    _JOINER = "joiner-epoch-99-avg-1.int8.onnx"
+    _TAIL_S = 0.66
+
+    def __init__(self, model_dir: str, device: str = "cpu", num_threads: int = 2):
+        from utils.onnx_provider import provider_for_device
+
+        import sherpa_onnx
+
+        encoder = os.path.join(model_dir, self._ENCODER)
+        decoder = os.path.join(model_dir, self._DECODER)
+        joiner = os.path.join(model_dir, self._JOINER)
+        tokens = os.path.join(model_dir, "tokens.txt")
+        provider = provider_for_device(device, (encoder, decoder, joiner))
+
+        self._recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+            tokens=tokens,
+            encoder=encoder,
+            decoder=decoder,
+            joiner=joiner,
+            num_threads=num_threads,
+            provider=provider,
+            sample_rate=SAMPLE_RATE,
+            feature_dim=80,
+            decoding_method="greedy_search",
+            enable_endpoint_detection=False,
+        )
+        log.info(
+            "[asr] sherpa-onnx streaming zipformer adapter loaded: "
+            "encoder=%s, device=%s, provider=%s",
+            encoder, device, provider,
+        )
+
+    def transcribe(self, wav_bytes: bytes, language: str) -> str:
+        return self.transcribe_aligned(wav_bytes, language)[0]
+
+    def transcribe_aligned(self, wav_bytes: bytes, language: str,
+                           include_emotion: bool = False) -> tuple[str, dict, dict]:
+        import io as _io
+        import wave as _wave
+
+        with _wave.open(_io.BytesIO(wav_bytes)) as wf:
+            pcm = wf.readframes(wf.getnframes())
+        n = len(pcm) // 2
+        samples = struct.unpack(f"<{n}h", pcm)
+        float_samples = [sample / 32768.0 for sample in samples]
+
+        stream = self._recognizer.create_stream()
+        stream.accept_waveform(SAMPLE_RATE, float_samples)
+        stream.accept_waveform(
+            SAMPLE_RATE, [0.0] * int(SAMPLE_RATE * self._TAIL_S))
+        stream.input_finished()
+        while self._recognizer.is_ready(stream):
+            self._recognizer.decode_stream(stream)
+
+        result = self._recognizer.get_result(stream)
+        text = result.text if hasattr(result, "text") else str(result)
+        tokens_fn = getattr(self._recognizer, "tokens", None)
+        timestamps_fn = getattr(self._recognizer, "timestamps", None)
+        alignment = {
+            "tokens": list(tokens_fn(stream) or ()) if callable(tokens_fn) else [],
+            "timestamps": (
+                list(timestamps_fn(stream) or ()) if callable(timestamps_fn) else []
+            ),
+            "duration_s": n / SAMPLE_RATE,
+        }
+        return text.strip(), {}, alignment
+
+
 class SherpaOnnxXASRAdapter(ASRAdapter):
     """Offline X-ASR transducer with general robot-domain hotword biasing."""
 
@@ -1010,6 +1095,21 @@ class SherpaOnnxXASRAdapter(ASRAdapter):
 # counts, and emitted nothing but `</s>`. See utils/onnx_provider.py for the
 # measurements and perception/README.md for the admission checklist.
 ASR_MODELS = {
+    "zipformer-zh-14m": {
+        "label": "Zipformer 14M (zh only, streaming transducer)",
+        "adapter": SherpaOnnxStreamingZipformerAdapter,
+        # Both figures are recorded so the challenge's ambiguous "100M" rule
+        # can be checked under its two common readings.
+        "parameters_m": 14,
+        "runtime_weights_mb": 30,
+        "devices": {
+            "cpu": {
+                "download": "asr_zipformer_zh_14m",
+                "dtype": "int8",
+                "dir": "/models/sherpa-onnx/zipformer-zh-14m",
+            },
+        },
+    },
     "x-asr-zh-en": {
         "label": "X-ASR Bilingual (zh+en, offline transducer)",
         "adapter": SherpaOnnxXASRAdapter,

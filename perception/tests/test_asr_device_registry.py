@@ -128,11 +128,96 @@ def test_device_schema_default_is_cpu():
 
 
 def test_asr_models_supporting():
+    assert "zipformer-zh-14m" in asr.asr_models_supporting("cpu")
     assert "sensevoice-small" in asr.asr_models_supporting("gpu")
     assert "parakeet-en" in asr.asr_models_supporting("gpu")
     # Measured 0.80x on CUDA — deliberately absent.
     assert "x-asr-zh-en" not in asr.asr_models_supporting("gpu")
     assert asr.asr_models_supporting("cpu") == sorted(asr.ASR_MODELS)
+
+
+def test_demo_model_meets_both_readings_of_the_100m_limit():
+    model = asr.ASR_MODELS["zipformer-zh-14m"]
+    assert model["parameters_m"] < 100
+    assert model["runtime_weights_mb"] < 100
+    assert set(model["devices"]) == {"cpu"}
+
+
+def test_zipformer_adapter_uses_the_documented_int8_file_set(monkeypatch, tmp_path):
+    calls = []
+
+    class _Stream:
+        def __init__(self):
+            self.waveforms = []
+            self.finished = False
+
+        def accept_waveform(self, sample_rate, samples):
+            self.waveforms.append((sample_rate, list(samples)))
+
+        def input_finished(self):
+            self.finished = True
+
+    class _Recognizer:
+        def __init__(self):
+            self.stream = None
+            self.decode_calls = 0
+
+        def create_stream(self):
+            self.stream = _Stream()
+            return self.stream
+
+        def is_ready(self, stream):
+            return self.decode_calls == 0
+
+        def decode_stream(self, stream):
+            self.decode_calls += 1
+
+        def get_result(self, stream):
+            return "  你好机器人  "
+
+        def tokens(self, stream):
+            return ["你", "好"]
+
+        def timestamps(self, stream):
+            return [0.1, 0.2]
+
+    recognizer = _Recognizer()
+
+    class _OnlineRecognizer:
+        @classmethod
+        def from_transducer(cls, **kwargs):
+            calls.append(kwargs)
+            return recognizer
+
+    fake_sherpa = types.SimpleNamespace(OnlineRecognizer=_OnlineRecognizer)
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", fake_sherpa)
+    monkeypatch.setattr("utils.onnx_provider.provider_for_device",
+                        lambda device, paths: "cpu")
+
+    for filename in (
+        "tokens.txt",
+        asr.SherpaOnnxStreamingZipformerAdapter._ENCODER,
+        asr.SherpaOnnxStreamingZipformerAdapter._DECODER,
+        asr.SherpaOnnxStreamingZipformerAdapter._JOINER,
+    ):
+        (tmp_path / filename).touch()
+
+    adapter = asr.SherpaOnnxStreamingZipformerAdapter(str(tmp_path), "cpu", 2)
+    wav = asr._silence_wav(0.1)
+    text, extras, alignment = adapter.transcribe_aligned(wav, "zh-CN")
+
+    assert text == "你好机器人"
+    assert extras == {}
+    assert alignment["tokens"] == ["你", "好"]
+    assert alignment["duration_s"] == pytest.approx(0.1)
+    assert recognizer.stream.finished is True
+    assert len(recognizer.stream.waveforms) == 2
+    assert len(recognizer.stream.waveforms[1][1]) == int(
+        asr.SAMPLE_RATE * adapter._TAIL_S)
+    assert calls[0]["encoder"].endswith(adapter._ENCODER)
+    assert calls[0]["decoder"].endswith(adapter._DECODER)
+    assert calls[0]["joiner"].endswith(adapter._JOINER)
+    assert calls[0]["enable_endpoint_detection"] is False
 
 
 @pytest.mark.parametrize("cfg, expected_dir", [

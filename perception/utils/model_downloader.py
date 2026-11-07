@@ -70,6 +70,20 @@ def _progress_hook(name: str, progress_cb=None):
     return hook
 
 MODELS = {
+    "asr_zipformer_zh_14m": {
+        # 14 M parameter Chinese-only streaming Transducer.  The int8 runtime
+        # combination used by plugins/asr.py is ~30 MB (int8 encoder/joiner +
+        # fp32 decoder), so it stays below the ASR challenge's 100 M / 100 MB
+        # limit under either interpretation.  Keep the URL overridable: the
+        # formal judge network mirrors model archives on its internal file
+        # server, while a standalone demo can use sherpa-onnx's official asset.
+        "url": os.environ.get(
+            "ASR_ZIPFORMER_ZH_14M_URL",
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+            "sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23.tar.bz2",
+        ),
+        "check_file": "tokens.txt",
+    },
     "asr_sensevoice": {
         "url": f"{COS_BASE}/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.zip",
         "check_file": "tokens.txt",
