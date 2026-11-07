@@ -29,6 +29,25 @@
 
 录音、模型、预测文件和视频都不要放进仓库。可以把它们放到仓库外的工作目录。
 
+## 本地录音采集网页
+
+项目提供一个只在本机运行的录音网页，内置 30 条机器人指令、普通对话、停顿、改口、
+静音和环境声文本。网页把录音直接编码为 16 kHz 单声道 PCM16 WAV，Python 服务保存
+音频并同步维护评测清单；不上传云端，也不会把音频写入 Git 仓库。
+
+```bash
+python3 perception/tools/asr_recorder/server.py
+```
+
+打开 `http://127.0.0.1:8765`，允许麦克风权限，按页面顺序录制。默认输出位置是：
+
+```text
+~/Documents/robot-asr-dataset/
+```
+
+前 10 条是调试集，后 20 条是固定测试集。详细说明见
+`perception/tools/asr_recorder/README.md`。
+
 ## 本机可做的检查
 
 ```bash

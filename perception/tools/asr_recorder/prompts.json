@@ -1,0 +1,214 @@
+[
+  {
+    "id": "dev-001",
+    "split": "dev",
+    "category": "移动指令",
+    "text": "小范小范请向前走一步",
+    "hint": "正常语速，距离麦克风约半米。"
+  },
+  {
+    "id": "dev-002",
+    "split": "dev",
+    "category": "移动指令",
+    "text": "小范小范请后退半米",
+    "hint": "保持自然语气，不要逐字朗读。"
+  },
+  {
+    "id": "dev-003",
+    "split": "dev",
+    "category": "移动指令",
+    "text": "小范小范请向左转九十度",
+    "hint": "数字按中文自然读法说出。"
+  },
+  {
+    "id": "dev-004",
+    "split": "dev",
+    "category": "安全指令",
+    "text": "小范小范请立即停止",
+    "hint": "使用略急促但清晰的语气。"
+  },
+  {
+    "id": "dev-005",
+    "split": "dev",
+    "category": "导航指令",
+    "text": "小范小范请导航到解放东路八十号",
+    "hint": "地址中的八十号按文字读出。"
+  },
+  {
+    "id": "dev-006",
+    "split": "dev",
+    "category": "跟随指令",
+    "text": "小范小范请跟着我走",
+    "hint": "距离麦克风约一米。"
+  },
+  {
+    "id": "dev-007",
+    "split": "dev",
+    "category": "充电指令",
+    "text": "小范小范请回到充电桩",
+    "hint": "正常音量录制。"
+  },
+  {
+    "id": "dev-008",
+    "split": "dev",
+    "category": "普通对话",
+    "text": "小范小范你叫什么名字",
+    "hint": "像日常提问一样说。"
+  },
+  {
+    "id": "dev-009",
+    "split": "dev",
+    "category": "状态询问",
+    "text": "小范小范你现在还剩多少电",
+    "hint": "保持自然语调。"
+  },
+  {
+    "id": "dev-010",
+    "split": "dev",
+    "category": "停顿测试",
+    "text": "小范小范请向前走两步",
+    "hint": "说完“向前”后停顿一秒，再继续说“走两步”。"
+  },
+  {
+    "id": "test-001",
+    "split": "test",
+    "category": "移动指令",
+    "text": "小范小范请向右转四十五度",
+    "hint": "正常语速录制。"
+  },
+  {
+    "id": "test-002",
+    "split": "test",
+    "category": "移动指令",
+    "text": "小范小范请向左移动半米",
+    "hint": "距离麦克风约一米。"
+  },
+  {
+    "id": "test-003",
+    "split": "test",
+    "category": "速度控制",
+    "text": "小范小范把速度降低到每秒零点五米",
+    "hint": "“零点五”连贯读出。"
+  },
+  {
+    "id": "test-004",
+    "split": "test",
+    "category": "避障指令",
+    "text": "小范小范请绕过前面的椅子",
+    "hint": "正常音量录制。"
+  },
+  {
+    "id": "test-005",
+    "split": "test",
+    "category": "操作指令",
+    "text": "小范小范请拿起桌上的红色水杯",
+    "hint": "距离麦克风约两米。"
+  },
+  {
+    "id": "test-006",
+    "split": "test",
+    "category": "操作指令",
+    "text": "小范小范请把水杯放到厨房台面上",
+    "hint": "自然语速，不需要刻意大声。"
+  },
+  {
+    "id": "test-007",
+    "split": "test",
+    "category": "家居控制",
+    "text": "小范小范请打开客厅的灯",
+    "hint": "正常语气录制。"
+  },
+  {
+    "id": "test-008",
+    "split": "test",
+    "category": "家居控制",
+    "text": "小范小范请关闭空调",
+    "hint": "略微降低音量录制。"
+  },
+  {
+    "id": "test-009",
+    "split": "test",
+    "category": "感知询问",
+    "text": "小范小范请检查前方有没有障碍物",
+    "hint": "像向机器人询问一样说。"
+  },
+  {
+    "id": "test-010",
+    "split": "test",
+    "category": "任务控制",
+    "text": "小范小范请停止跟随",
+    "hint": "正常语速录制。"
+  },
+  {
+    "id": "test-011",
+    "split": "test",
+    "category": "任务控制",
+    "text": "小范小范取消刚才的任务",
+    "hint": "保持自然语气。"
+  },
+  {
+    "id": "test-012",
+    "split": "test",
+    "category": "任务控制",
+    "text": "小范小范请重复上一条指令",
+    "hint": "清晰但不要一字一顿。"
+  },
+  {
+    "id": "test-013",
+    "split": "test",
+    "category": "普通对话",
+    "text": "小范小范请介绍一下你的功能",
+    "hint": "像日常聊天一样说。"
+  },
+  {
+    "id": "test-014",
+    "split": "test",
+    "category": "普通对话",
+    "text": "小范小范今天天气怎么样",
+    "hint": "正常语速录制。"
+  },
+  {
+    "id": "test-015",
+    "split": "test",
+    "category": "普通对话",
+    "text": "小范小范从这里到会议室需要多久",
+    "hint": "距离麦克风约两米。"
+  },
+  {
+    "id": "test-016",
+    "split": "test",
+    "category": "停顿测试",
+    "text": "小范小范请导航到三楼会议室",
+    "hint": "说完“导航到”后停顿一秒再继续。"
+  },
+  {
+    "id": "test-017",
+    "split": "test",
+    "category": "改口测试",
+    "text": "小范小范请向左不对请向右转",
+    "hint": "按文字自然说出改口内容，不要省略“不对”。"
+  },
+  {
+    "id": "test-018",
+    "split": "test",
+    "category": "重复测试",
+    "text": "小范小范请向前向前走一步",
+    "hint": "按文字重复两次“向前”。"
+  },
+  {
+    "id": "test-019",
+    "split": "test",
+    "category": "静音测试",
+    "text": "",
+    "display_text": "保持安静五秒，不要说话",
+    "hint": "点击录音后保持完全安静，约五秒后停止。"
+  },
+  {
+    "id": "test-020",
+    "split": "test",
+    "category": "环境声测试",
+    "text": "",
+    "display_text": "录制五秒环境声音，不要说话",
+    "hint": "可以保留风扇、键盘或室内背景声，但不要播放人声。"
+  }
+]

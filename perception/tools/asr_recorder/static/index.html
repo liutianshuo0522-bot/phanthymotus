@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101827">
+  <title>Robot ASR Voice Lab</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <span></span><span></span><span></span><span></span>
+        </div>
+        <div>
+          <p class="eyebrow">ROBOT ASR · DATA STUDIO</p>
+          <h1>中文语音采集台</h1>
+        </div>
+      </div>
+      <div class="local-pill">
+        <span class="status-dot"></span>
+        仅保存在本机
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="sidebar">
+        <section class="progress-card">
+          <div class="progress-heading">
+            <span>录制进度</span>
+            <strong id="progress-count">0 / 30</strong>
+          </div>
+          <div class="progress-track" aria-hidden="true">
+            <div id="progress-fill" class="progress-fill"></div>
+          </div>
+          <p id="split-summary">调试集 0/10 · 测试集 0/20</p>
+        </section>
+
+        <section class="prompt-browser">
+          <div class="section-title">
+            <span>句子列表</span>
+            <button id="next-unsaved" class="text-button" type="button">下一条未录</button>
+          </div>
+          <div id="prompt-list" class="prompt-list" aria-label="录音句子列表"></div>
+        </section>
+
+        <section class="privacy-note">
+          <span class="privacy-icon">⌁</span>
+          <div>
+            <strong>本地数据集</strong>
+            <p>浏览器不连接云服务，WAV 和标注直接写入你的电脑。</p>
+          </div>
+        </section>
+      </aside>
+
+      <section class="recording-panel">
+        <div class="panel-header">
+          <div class="prompt-meta">
+            <span id="prompt-position">01 / 30</span>
+            <span id="split-badge" class="badge badge-dev">调试集</span>
+            <span id="category-badge" class="badge badge-category">移动指令</span>
+          </div>
+          <span id="saved-badge" class="saved-badge hidden">✓ 已保存</span>
+        </div>
+
+        <article class="prompt-card">
+          <p class="prompt-label">请自然读出</p>
+          <h2 id="prompt-text">正在加载录音文本…</h2>
+          <div class="hint-row">
+            <span aria-hidden="true">◎</span>
+            <p id="prompt-hint">请允许浏览器使用麦克风。</p>
+          </div>
+        </article>
+
+        <section class="recorder" aria-live="polite">
+          <div id="mic-stage" class="mic-stage">
+            <div class="pulse-ring ring-one"></div>
+            <div class="pulse-ring ring-two"></div>
+            <button id="record-button" class="record-button" type="button" aria-label="开始录音">
+              <span class="mic-glyph" aria-hidden="true"></span>
+            </button>
+          </div>
+          <p id="recording-state" class="recording-state">点击麦克风开始录音</p>
+          <time id="timer" class="timer">00:00.0</time>
+          <div class="level-meter" aria-label="麦克风音量">
+            <div id="level-fill" class="level-fill"></div>
+          </div>
+        </section>
+
+        <section id="review-panel" class="review-panel hidden">
+          <div class="review-copy">
+            <strong>录音预览</strong>
+            <span id="review-duration">0.0 秒</span>
+          </div>
+          <audio id="audio-preview" controls preload="metadata"></audio>
+        </section>
+
+        <div class="actions">
+          <button id="previous-button" class="button button-secondary" type="button">← 上一条</button>
+          <button id="discard-button" class="button button-secondary hidden" type="button">重录</button>
+          <button id="save-button" class="button button-primary" type="button" disabled>保存并下一条 →</button>
+          <button id="skip-button" class="button button-ghost" type="button">暂时跳过</button>
+        </div>
+
+        <footer class="panel-footer">
+          <div>
+            <span>保存位置</span>
+            <code id="output-directory">正在连接本地服务…</code>
+          </div>
+          <div class="format-note">16 kHz · 单声道 · PCM16 WAV</div>
+        </footer>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
