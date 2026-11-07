@@ -1,6 +1,6 @@
 # 中文机器人 ASR Demo 技术报告
 
-> 报告状态：开发基线（Mac 环境）  
+> 报告状态：Mac 基线完成；ROS2/Jetson 验收工具已就绪，板端数据待采集
 > 数据与实验日期：2026-11-07  
 > 当前分支：`codex/asr-demo`
 
@@ -11,11 +11,15 @@
 评测链路。
 
 当前版本新增了紧凑型 `zipformer-zh-14m` 中文模型适配、本地录音采集页面、
-音频格式校验、批量转写和 CER/RTF 评测工具。在 30 条自录中文机器人指令上，
-Mac CPU 环境的模型直接解码基线为：整体 CER `16.41%`，RTF `0.0303`。
+音频格式校验、批量转写，以及 1024-byte 实时分块的 VAD/ASR 全链路评测。在
+30 条自录中文机器人指令上，Mac CPU 环境的模型直接解码基线为：整体 CER
+`16.41%`，RTF `0.0303`；实时分块全链路为：整体 CER `16.11%`、主动处理 RTF
+`0.0618`、端点延迟 P50/P95 `557/667 ms`。
 
-这些数字是开发阶段基线，只包含模型解码，不包含 VAD 端点等待、ROS2 传输和
-Jetson 资源占用，不应当作榜单或 Jetson 正式结论。
+这些数字是开发阶段基线。全链路数字包含 WAV 分块、VAD、尾段 flush 和 ASR，
+但仍不包含 ROS2 传输以及 Jetson 资源占用，不应当作榜单或 Jetson 正式结论。
+下一阶段所需的真实 ROS2 回放、订阅/队列计数和 `tegrastats` 三态对比工具已经实现；
+本报告不会在没有 Jetson 真机运行记录时填入推测数字。
 
 ## 2. 场景与资源约束
 
@@ -52,8 +56,10 @@ VAD 语音检测与分句
 ROS2 文本结果 → core 层
 ```
 
-本阶段已验证“WAV 格式检查 → 整段模型解码 → 文本与评测结果”。
-1024-byte 实时分块、VAD 端点、尾段 flush 和 ROS2 topic 端到端验证是下一阶段工作。
+Mac 阶段已验证“WAV 格式检查 → 1024-byte 实时分块 → VAD 分句/尾段 flush →
+ASR → 文本与评测结果”。下一阶段工具会把完全相同的数据改为真实
+`audio_msgs/AudioChunk` 发布，订阅生产 ASR 的两个文本 topic，并从 ASR `info`
+读取接收、入队、队列丢弃和拒绝计数；该阶段仍需在 Jetson 上实际执行。
 
 ## 4. 已完成实现
 
@@ -66,12 +72,18 @@ ROS2 文本结果 → core 层
 | 数据校验 | 检查采样率、声道、采样宽度、文件是否存在和清单是否可读 |
 | 批量识别 | 对固定 manifest 批量输出逐条 JSONL 预测 |
 | 可复现评测 | 计算 CER、替换/删除/插入数、RTF、缺失预测、重复预测和静音误输出 |
+| 分块回放 | 严格发送 1024-byte 分块；支持快速回归和 32 ms wall-clock 实时节拍 |
+| VAD/ASR 全链路 | 共用生产 VAD 构造，记录分句、尾段、端点延迟、队列/节拍和全链路 RTF |
+| ROS2 验收回放 | 真实发布 `AudioChunk`、订阅生产结果 topic，记录发布/订阅差额、队列丢块与 DDS 交付延迟 |
+| Jetson 资源采集 | 解析 `tegrastats`，区分系统空闲、模型已加载空闲和 ROS 回放三态 |
 | 提交检查 | 提供仓库大文件检查，模型、录音和结果不进 Git |
 
 相关代码：
 
 - `perception/plugins/asr.py`
 - `perception/tools/asr_eval.py`
+- `perception/tools/asr_ros2_eval.py`
+- `perception/tools/jetson_resources.py`
 - `perception/tools/asr_recorder/`
 - `perception/tests/test_asr_eval.py`
 - `perception/tests/test_asr_recorder.py`
@@ -161,9 +173,18 @@ RTF = 模型解码耗时 / 音频时长
 - 静音误输出次数；
 - 可选的句尾响应延迟 P50/P95。
 
-本轮不经过实时 VAD，因此句尾响应延迟为空，不用解码耗时伪装端点延迟。
+模型直接解码基线不经过实时 VAD，因此句尾响应延迟为空，不用解码耗时伪装端点
+延迟。新增的全链路回放按 VAD 报告的语音结束采样点计时：端点延迟包含 VAD 等待、
+调度落后和 ASR 解码；`full_chain_rtf` 只累计分块转换、VAD 和 ASR 的主动处理时间，
+不包含刻意等待 32 ms 节拍的 sleep。`replay_wall_rtf` 另行保留完整实际耗时。
 
-## 8. Mac 模型直接解码基线
+ROS2 阶段使用发送块的可信 `header.stamp` 与生产结果中的 `audio_end_ts` 计算端点
+延迟，因此额外包含输入 DDS、生产多进程队列、输出 DDS 和评测订阅回调。生产结果的
+`asr_complete_ts` 到评测订阅时间记为 `ros_delivery_ms`。发布端成功调用次数并不等于
+订阅端收到次数，所以 ASR 节点另行累计 `received`、`enqueued`、`queue_dropped` 和
+`rejected`；只有隔离输入 topic 下发布数、接收数和入队数对得上，才能报告零丢块。
+
+## 8. Mac 实验结果
 
 ### 8.1 分组结果
 
@@ -209,6 +230,57 @@ RTF = 模型解码耗时 / 音频时长
 静音样本 `test-019` 误输出“我”；环境声样本 `test-020` 正确输出空文本。
 在完整机器人链路中，这类静音应优先由 VAD 阻止，不应依赖删除特定识别词。
 
+### 8.3 1024-byte 实时 VAD/ASR 全链路
+
+同一批音频使用生产配置 `vad_threshold=0.5`、`vad_silence_ms=400`、
+`vad_pre_roll_ms=500`。每个输入块固定为 1024 bytes/512 samples/32 ms；`--realtime`
+按 wall clock 发送。WAV 到达 EOF 时，只有仍在说话的文件才继续补静音块，最大
+flush 窗口 2 秒，VAD 闭合后立即停止。
+
+| 数据 | 样本 | 预期语音 | VAD 分句 | 原始 CER | 解码 RTF | 全链路 RTF | 端点 P50/P95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 开发集 | 10 | 10 | 10 | 18.10% | 0.0280 | 0.0622 | 532/593 ms |
+| 测试集 | 20 | 18 | 19 | 15.18% | 0.0302 | 0.0616 | 565/895 ms |
+| 整体 | 30 | 28 | 29 | 16.11% | 0.0295 | 0.0618 | 557/667 ms |
+
+整体 53 个原始 ASR 编辑错误包含 42 个替换、9 个删除和 2 个插入。全链路稳定性
+结果如下：
+
+| 指标 | 结果 |
+| --- | ---: |
+| 语音文件漏句 | 0/28 |
+| 额外 VAD 分句 | 1（空文本） |
+| 静音/环境声误输出 | 0/2 |
+| 需要尾段 flush 的文件 | 26 |
+| 尾段丢失 | 0 |
+| 丢弃的短 VAD 分句 | 1 |
+| 输入/flush 分块 | 4939/622 |
+| 离线回放丢块 | 0 |
+
+测试集 P95 被 `test-013` 的一次 `502 ms` ASR 解码尖峰拉到 `895 ms`；其余最高
+端点延迟为 `667 ms`。`replay_wall_rtf=1.1574` 包含真实节拍和每个独立 WAV
+结束后的必要尾静音，不是模型吞吐指标，所以与主动处理的 `full_chain_rtf=0.0618`
+分开报告。
+
+另按严格字符前缀统计，“小范小范”命中 10/28（35.71%）；去除参考/预测中对应的
+四字符唤醒前缀位置后，命令 CER 为 10.60%（开发集 16.92%，测试集 7.89%）。这个
+严格字符指标用于暴露同音字问题，不等同于生产 `asr_kws` 的 IPA 模糊匹配命中率，
+也没有覆盖原始 CER。
+
+### 8.4 ROS2/Jetson 验收状态
+
+本轮开发机没有 Jetson、`rclpy` 和板端 perception 运行环境，因此没有伪造 ROS2 或
+资源数字。当前状态为：
+
+| 验收项 | 工具状态 | 实测状态 |
+| --- | --- | --- |
+| 1024-byte `AudioChunk` 实时发布 | 已实现 | 待 Jetson |
+| 生产 `/asr`、`/asr_background` 订阅 | 已实现 | 待 Jetson |
+| 发布→订阅→VAD 队列丢块核对 | 已实现 | 待 Jetson |
+| ROS2 端点延迟与输出 DDS 延迟 | 已实现 | 待 Jetson |
+| 系统空闲/模型加载/回放三态资源 | 已实现 | 待 Jetson |
+| GPU P95 与最大值是否低于 10% | 自动判定 | 待 Jetson |
+
 ## 9. 复现步骤
 
 录音、模型和预测文件默认保存在仓库外。以本地默认数据目录为例：
@@ -232,9 +304,92 @@ python perception/tools/asr_eval.py validate \
   --predictions "$HOME/Documents/robot-asr-dataset/results/zipformer-zh-14m-predictions.jsonl" \
   --output "$HOME/Documents/robot-asr-dataset/results/zipformer-zh-14m-score.json"
 
-# 4. 检查 Git 提交是否存在超大文件
+# 4. 1024-byte 实时 VAD/ASR 全链路评测
+SSL_CERT_FILE=/etc/ssl/cert.pem .venv/bin/python \
+  perception/tools/asr_eval.py replay \
+  --manifest "$HOME/Documents/robot-asr-dataset/manifest.jsonl" \
+  --output "$HOME/Documents/robot-asr-dataset/results/zipformer-zh-14m-e2e-realtime-predictions.jsonl" \
+  --report "$HOME/Documents/robot-asr-dataset/results/zipformer-zh-14m-e2e-realtime-report.json" \
+  --model zipformer-zh-14m \
+  --model-dir "$HOME/Library/Caches/robot-asr/models/zipformer-zh-14m" \
+  --num-threads 4 \
+  --realtime
+
+# 5. 检查 Git 提交是否存在超大文件
 python perception/tools/asr_eval.py check-submission
 ```
+
+### 9.1 Jetson 真实 ROS2 回放
+
+以下命令必须在 perception/ROS2 环境中运行，数据目录也必须挂载到容器内。先把生产
+插件固定为 CPU 小模型和纯 VAD 模式；纯 VAD 模式会发布完整转写，才能与原始 CER
+直接比较。配置调用可能异步加载模型，应轮询 `info` 直到不再是 `loading`。
+
+```bash
+curl -s http://127.0.0.1:15720 \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"asr","arguments":{"action":"config","asr_model":"zipformer-zh-14m","device":"cpu","trigger_mode":"vad","publish_background":false,"save_vad_segments":false}}}'
+
+curl -s http://127.0.0.1:15720 \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"asr","arguments":{"action":"info","instance_id":"asr-eval","input_topic":"/asr_eval/audio"}}}'
+```
+
+模型就绪后运行回放。`--mcp-url` 让工具在需要时启动 ASR 实例，并在回放前后读取
+生产传输计数；`--stop-after` 只停止由本工具启动的实例。`/asr_eval/audio` 必须是
+隔离 topic，不能同时有麦克风或第二个回放器发布，否则发布/接收差额没有意义。
+
+```bash
+python perception/tools/asr_ros2_eval.py \
+  --manifest /data/robot-asr-dataset/manifest.jsonl \
+  --input-topic /asr_eval/audio \
+  --output /data/robot-asr-dataset/results/jetson-ros2-predictions.jsonl \
+  --report /data/robot-asr-dataset/results/jetson-ros2-report.json \
+  --mcp-url http://127.0.0.1:15720 \
+  --instance-id asr-eval \
+  --stop-after
+```
+
+验收时至少检查报告中的 `publisher_errors=0`、
+`publisher_to_subscriber_gap_chunks=0`、`queue_dropped_chunks=0`、
+`rejected_chunks=0` 和 `transport_ok=true`。还应对照 Mac 基线检查 CER、漏句、静音
+误输出、端点 P50/P95 和 `ros_delivery_ms_p50/p95`，不能只看“有文本输出”。
+
+### 9.2 Jetson `tegrastats` 三态资源采集
+
+资源日志从 Jetson 主机采集；三个阶段必须保持功耗模式、时钟策略和其余机器人卡片
+一致。每个阶段至少 60 秒，回放阶段覆盖整个数据集。正式测模型常驻内存时，A 使用
+相同服务配置但禁用 ASR 插件，B 用 `zipformer-zh-14m`/CPU 配置干净重启 perception
+并等待预热完成；不要先加载默认 SenseVoice 再热切换后就把差值称为 Zipformer 的
+常驻成本。若无法构造这个对照，把已加载空闲日志作为 `--idle-log` 并省略
+`--loaded-idle-log`，只报告回放增量，不得报告模型常驻增量。
+
+```bash
+# A. 相同服务和功耗模式，仅禁用 ASR 插件
+python perception/tools/jetson_resources.py record \
+  --output /data/robot-asr-dataset/results/jetson-system-idle.log \
+  --duration-s 60
+
+# B. 干净启动 zipformer，预热完成且没有音频输入
+python perception/tools/jetson_resources.py record \
+  --output /data/robot-asr-dataset/results/jetson-asr-loaded-idle.log \
+  --duration-s 60
+
+# C. 另一个终端运行 ROS2 回放；本命令保持运行，回放结束后 Ctrl-C
+python perception/tools/jetson_resources.py record \
+  --output /data/robot-asr-dataset/results/jetson-ros2-replay.log
+
+python perception/tools/jetson_resources.py compare \
+  --idle-log /data/robot-asr-dataset/results/jetson-system-idle.log \
+  --loaded-idle-log /data/robot-asr-dataset/results/jetson-asr-loaded-idle.log \
+  --replay-log /data/robot-asr-dataset/results/jetson-ros2-replay.log \
+  --gpu-limit 10 \
+  --output /data/robot-asr-dataset/results/jetson-resources-report.json
+```
+
+GPU 约束同时报告 P95 和最大值；任一项达到或超过 10% 时命令都以非零状态退出，
+两项分开保留以区分持续超限与短尖峰。RAM 分成“模型常驻相对系统空闲”和“回放相对
+模型已加载空闲”两个增量，避免把模型加载成本误算成每次识别的临时开销。
 
 为保证对照公平，改进版必须固定硬件、模型文件、线程数、输入音频和计时口径。
 
@@ -242,19 +397,21 @@ python perception/tools/asr_eval.py check-submission
 
 1. 当前只有一名说话人、30 条音频，不能代表多人、方言和真实机器人噪声环境。
 2. RTF 来自 Mac CPU 热运行，不能用于推断 Jetson 性能。
-3. 当前批量评测为整段 WAV 解码，未经过 VAD、1024-byte 实时分块和 ROS2。
-4. 句尾延迟、尾段丢失、重复分句、队列积压和长时间稳定性尚未量化。
-5. Jetson 的 GPU、CPU、内存占用和冷启动耗时尚未实测。
-6. 唤醒词受限纠错、命令文本 CER 和静音 VAD 过滤尚未实施，本报告未将它们计入基线。
+3. ROS2 与生产队列的验收工具已实现，但尚未在 Jetson 上生成实测报告；当前表格仍只
+   能引用 Mac 单进程基线。
+4. 当前只有 157.7 秒的逐文件回放；长时间队列积压、重启恢复和持续运行尚未量化。
+5. Jetson 的 GPU、CPU、内存占用和冷启动耗时尚未实测；资源工具已覆盖稳态三态，
+   冷启动耗时仍需结合 perception 日志单独记录。
+6. 唤醒命中率是严格字符前缀诊断，不是生产 IPA 模糊匹配的端到端命中率。
 
 ## 11. 下一阶段
 
-1. 实现离线实时回放工具，按1024 bytes 向完整 VAD/ASR 链路送入音频。
-2. 记录分句数、漏句、重复、尾段丢失、句尾延迟 P50/P95 和全链路 RTF。
-3. 只使用开发集选择 VAD 和唤醒词参数；参数固定后才重跑测试集。
-4. 同时报告原始 ASR CER、唤醒命中率和去除唤醒词后的命令 CER，不用后处理覆盖原始结果。
-5. 在 Jetson Orin 8G 上验证 ROS2 topic，并用 `tegrastats` 记录资源和持续运行结果。
-6. 更新本报告的基线/改进对照表，再录制最终演示视频。
+1. 只使用开发集选择 VAD 和唤醒词参数；参数固定后才重跑测试集。
+2. 在 Jetson Orin 8G 上运行已提供的真实 ROS2 回放，保存报告并确认生产队列零丢块。
+3. 运行 `tegrastats` 三态采集，填写 GPU、CPU、内存结果，并从 perception 日志补记
+   冷启动耗时。
+4. 单独评测生产 IPA 模糊唤醒命中率，不用后处理覆盖原始 ASR CER。
+5. 扩大说话人、方言、距离和机器人本体噪声数据，再录制最终演示视频。
 
 ## 12. 代码与实验记录
 

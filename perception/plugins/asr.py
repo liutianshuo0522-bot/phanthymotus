@@ -30,6 +30,11 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from std_msgs.msg import String
 
 from plugins.vad_preroll import PcmHistory
+from utils.asr_vad import (
+    BUFFER_S as SHARED_VAD_BUFFER_S,
+    MAX_SPEECH_S as SHARED_VAD_MAX_SPEECH_S,
+    build_sherpa_vad,
+)
 
 log = logging.getLogger(__name__)
 
@@ -70,8 +75,8 @@ MODEL_LOAD_GRACE_S = 3.0
 # back, a 33.4 s segment instead of a 30 s one, and — because the force-cut
 # also switches the model to threshold 0.90 / min_silence 0.1 s until the
 # buffer drains — a spurious 1.1 s fragment cut immediately after it.
-VAD_MAX_SPEECH_S = 30
-VAD_BUFFER_S     = 35
+VAD_MAX_SPEECH_S = SHARED_VAD_MAX_SPEECH_S
+VAD_BUFFER_S     = SHARED_VAD_BUFFER_S
 # Retain a maximum VAD segment plus 30 s of queueing margin, at Bumi's 20 Hz
 # maximum direction rate. Snapshot at dequeue so transcription cannot evict it.
 DIRECTION_HISTORY_S = VAD_MAX_SPEECH_S + 30
@@ -622,6 +627,16 @@ def _asr_topics_in(audio_topic: str = "", direction_topic: str = "") -> list[dic
     return [{"topic": audio_topic, "format": AUDIO_FORMAT, "desc": "mic audio input"},
             {"topic": direction_topic, "format": "sensor/sound-direction",
              "desc": "sound direction input"}]
+
+
+def _sum_transport_stats(nodes) -> dict:
+    snapshots = [node._transport_stats() for node in nodes]
+    if not snapshots:
+        return {}
+    return {
+        key: sum(snapshot.get(key, 0) for snapshot in snapshots)
+        for key in snapshots[0]
+    }
 
 
 _ASR_PUB_QOS = QoSProfile(
@@ -1448,35 +1463,13 @@ def _vad_worker(pcm_q: multiprocessing.Queue, result_q: multiprocessing.Queue,
     _log = logging.getLogger("asr.vad_worker")
 
     # ── Initialize VAD ──
-    import sherpa_onnx
     from utils.model_downloader import ensure_model
 
     vad_model_dir = '/models/sherpa-onnx/vad'
     ensure_model("vad", vad_model_dir)
     vad_model_path = os.path.join(vad_model_dir, "silero_vad.onnx")
 
-    vad_config = sherpa_onnx.VadModelConfig(
-        silero_vad=sherpa_onnx.SileroVadModelConfig(
-            model=vad_model_path,
-            threshold=threshold,
-            min_silence_duration=silence_ms / 1000.0,
-            min_speech_duration=0.1,
-            window_size=512,
-            max_speech_duration=VAD_MAX_SPEECH_S,
-        ),
-        sample_rate=SAMPLE_RATE,
-        num_threads=1,
-        # CPU on purpose, even when the image has the CUDA-enabled wheel and ASR
-        # runs on the GPU: silero VAD infers one 512-sample window at a time, so
-        # a CUDA session pays a kernel launch plus a H2D/D2H copy per 32 ms of
-        # audio for a model small enough to finish on one core. It would also
-        # hold a second CUDA context in this child process. Only ASR, KWS and
-        # hold a second CUDA context in this child process. Only ASR and the
-        # sherpa TTS engine follow `device`.
-        provider="cpu",
-    )
-    vad = sherpa_onnx.VoiceActivityDetector(
-        vad_config, buffer_size_in_seconds=VAD_BUFFER_S)
+    vad = build_sherpa_vad(vad_model_path, threshold, silence_ms)
     pre_roll_samples = max(0, int(SAMPLE_RATE * pre_roll_ms / 1000))
     silence_samples = max(0, int(SAMPLE_RATE * silence_ms / 1000))
     # One second past the longest segment the VAD can hand us, so pre_roll()
@@ -1740,6 +1733,35 @@ class _ASRNode(Node):
         # _teardown() while already holding it.
         self._lifecycle_lock = threading.RLock()
         self._audio_contract_warns: dict = {}
+        # Cumulative counters for one start/stop run.  The ROS2 replay tool can
+        # count successful publish() calls, but only the subscriber can tell us
+        # whether a BEST_EFFORT sample reached the callback and whether the
+        # bounded VAD input queue accepted it.  Keep these out of transcript
+        # payloads (which feed the LLM); expose them through info/status only.
+        self._transport_lock = threading.Lock()
+        self._reset_transport_stats()
+
+    def _reset_transport_stats(self) -> None:
+        with self._transport_lock:
+            self._transport_counters = {
+                "received_chunks": 0,
+                "received_bytes": 0,
+                "enqueued_chunks": 0,
+                "enqueued_bytes": 0,
+                "queue_dropped_chunks": 0,
+                "queue_dropped_bytes": 0,
+                "rejected_chunks": 0,
+                "rejected_bytes": 0,
+            }
+
+    def _record_transport(self, outcome: str, byte_count: int) -> None:
+        with self._transport_lock:
+            self._transport_counters[f"{outcome}_chunks"] += 1
+            self._transport_counters[f"{outcome}_bytes"] += byte_count
+
+    def _transport_stats(self) -> dict:
+        with self._transport_lock:
+            return dict(self._transport_counters)
 
     def start(self) -> dict:
         with self._lifecycle_lock:
@@ -1774,6 +1796,7 @@ class _ASRNode(Node):
         log.info(f"[asr] subscribing to topic={self._input_topic}, publishing to={self._output_topic}")
         self._first_chunk_event = threading.Event()
         self._worker_ready = threading.Event()
+        self._reset_transport_stats()
         self._sub = self.create_subscription(AudioChunk, self._input_topic, self._audio_cb, _LOW_LAT_QOS)
         if self._direction_topic:
             self._direction_sub = self.create_subscription(
@@ -1916,6 +1939,8 @@ class _ASRNode(Node):
     def _audio_cb(self, msg):
         if self._stop_event.is_set():
             return
+        raw_pcm = bytes(msg.data)
+        self._record_transport("received", len(raw_pcm))
         # Signal first chunk arrival to unblock start()
         if not self._first_chunk_event.is_set():
             self._first_chunk_event.set()
@@ -1932,17 +1957,23 @@ class _ASRNode(Node):
                     except Exception:
                         pass
             self.state = "error"
+            self._record_transport("rejected", len(raw_pcm))
             return
-        pcm = self._check_audio_contract(getattr(msg, 'format', '') or '', bytes(msg.data))
+        pcm = self._check_audio_contract(getattr(msg, 'format', '') or '', raw_pcm)
         if not pcm:
+            self._record_transport("rejected", len(raw_pcm))
             return
         ts  = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         if ts < 1e9:  # header.stamp not set by publisher
             ts = time.time()
         try:
             self._pcm_queue.put_nowait((pcm, ts, msg.header.stamp.sec >= 1_000_000_000))
+            self._record_transport("enqueued", len(pcm))
         except Exception:
-            pass  # drop if severely behind
+            # A bounded multiprocessing.Queue raises Full when VAD is severely
+            # behind.  Counting this separately from ROS delivery loss is the
+            # only way the Jetson acceptance run can diagnose the bottleneck.
+            self._record_transport("queue_dropped", len(pcm))
 
     def _warn_audio_contract(self, key: str, detail: str) -> None:
         """Warn on the first violation of a kind, then every 500th one.
@@ -2248,6 +2279,7 @@ class _ASRNode(Node):
             "topic_in": _asr_topics_in(self._input_topic, self._direction_topic),
             "topic_out": _asr_topics_out(
                 self._input_topic, self._publish_background_enabled),
+            "transport": self._transport_stats(),
         }
 
 
@@ -2491,6 +2523,7 @@ class ASRPlugin:
                     "topic_in": _asr_topics_in(node._input_topic, node._direction_topic),
                     "topic_out": _asr_topics_out(
                         node._input_topic, node._publish_background_enabled),
+                    "transport": node._transport_stats(),
                     "desc": "ASR service — converts audio/pcm-16k to text",
                 }
             if instance_id:
@@ -2523,6 +2556,8 @@ class ASRPlugin:
                 "state": state,
                 "topic_in": topics_in,
                 "topic_out": topics_out,
+                **({"transport": _sum_transport_stats(nodes_snapshot)}
+                   if nodes_snapshot else {}),
                 "desc": "ASR service — converts audio/pcm-16k to text",
             }
 

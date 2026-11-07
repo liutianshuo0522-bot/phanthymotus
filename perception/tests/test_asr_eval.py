@@ -163,3 +163,117 @@ def test_standalone_model_dir_uses_an_external_cache(monkeypatch, tmp_path):
 def test_standalone_model_dir_honours_an_explicit_path(tmp_path):
     expected = tmp_path / "model"
     assert asr_eval._standalone_model_dir(str(expected)) == expected.resolve()
+
+
+class _FakeVadSegment:
+    def __init__(self, samples, start=0):
+        self.samples = samples
+        self.start = start
+
+
+class _TailFlushVad:
+    """Emit one 1 s segment after two trailing silence chunks."""
+
+    def __init__(self, input_chunks=32):
+        self.input_chunks = input_chunks
+        self.chunk_sizes = []
+        self.reset()
+
+    def reset(self):
+        self.calls = 0
+        self.speaking = False
+        self.queued = []
+
+    def accept_waveform(self, samples):
+        self.calls += 1
+        self.chunk_sizes.append(len(samples))
+        self.speaking = True
+        if self.calls == self.input_chunks + 2:
+            self.queued.append(_FakeVadSegment([0.25] * 16000))
+            self.speaking = False
+
+    def is_speech_detected(self):
+        return self.speaking
+
+    def empty(self):
+        return not self.queued
+
+    @property
+    def front(self):
+        return self.queued[0]
+
+    def pop(self):
+        self.queued.pop(0)
+
+
+def test_replay_uses_exact_chunks_and_flushes_the_tail(tmp_path):
+    audio = _wav(tmp_path / "speech.wav", frames=16000)
+    vad = _TailFlushVad()
+
+    class _Adapter:
+        def transcribe(self, wav_bytes, language):
+            assert wav_bytes.startswith(b"RIFF")
+            assert language == "zh-CN"
+            return "小范小范向前走"
+
+    result = asr_eval.replay_wav(
+        audio, _Adapter(), vad, flush_ms=64, pre_roll_ms=0)
+
+    assert vad.chunk_sizes == [512] * 34
+    assert result["input_chunks"] == 32
+    assert result["flush_chunks"] == 2
+    assert result["tail_flush_emitted"] is True
+    assert result["tail_dropped"] is False
+    assert result["segment_count"] == 1
+    assert result["text"] == "小范小范向前走"
+    assert result["segments"][0]["emitted_during_flush"] is True
+    assert result["segments"][0]["vad_endpoint_ms"] == pytest.approx(88)
+    assert result["endpoint_latency_ms"] >= 88
+
+
+def test_replay_reports_a_pending_tail_when_flush_is_disabled(tmp_path):
+    audio = _wav(tmp_path / "speech.wav", frames=16000)
+    result = asr_eval.replay_wav(
+        audio, object(), _TailFlushVad(), flush_ms=0, pre_roll_ms=0)
+
+    assert result["pending_speech_at_eof"] is True
+    assert result["tail_dropped"] is True
+    assert result["segment_count"] == 0
+    assert result["status"] == "no_speech"
+
+
+def test_score_adds_replay_wake_and_command_metrics(tmp_path):
+    audio = _wav(tmp_path / "sample.wav", frames=16000)
+    manifest = [{
+        "id": "speech", "audio": str(audio), "_audio_path": audio,
+        "text": "小范小范请前进",
+    }]
+    predictions = [{
+        "id": "speech",
+        "text": "小贩小范请前进",
+        "audio_duration_s": 1,
+        "decode_ms": 50,
+        "pipeline_ms": 75,
+        "replay_wall_ms": 1000,
+        "segment_count": 2,
+        "input_chunks": 32,
+        "flush_chunks": 10,
+        "dropped_chunks": 0,
+        "tail_flush_emitted": True,
+        "tail_dropped": False,
+        "segments": [
+            {"endpoint_latency_ms": 410},
+            {"endpoint_latency_ms": 430},
+        ],
+    }]
+
+    summary, _ = asr_eval.score(manifest, predictions, "小范小范")
+
+    assert summary["detected_utterances"] == 2
+    assert summary["duplicate_utterances"] == 1
+    assert summary["tail_flush_files"] == 1
+    assert summary["endpoint_latency_ms_p50"] == 410
+    assert summary["endpoint_latency_ms_p95"] == 430
+    assert summary["full_chain_rtf"] == pytest.approx(0.075)
+    assert summary["wake_hit_rate"] == 0
+    assert summary["command_cer"] == 0

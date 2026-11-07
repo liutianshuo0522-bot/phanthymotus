@@ -369,6 +369,29 @@ def test_every_info_branch_uses_the_shared_builder():
 def test_status_dict_agrees_with_info():
     node = make_node(None)
     assert node._status_dict()["topic_out"] == asr_module._asr_topics_out("/mic/audio")
+    assert node._status_dict()["transport"]["received_chunks"] == 0
+
+
+def test_instance_and_aggregate_info_expose_transport_counters():
+    plugin = make_plugin()
+    first = make_node(None)
+    second = asr_module._ASRNode(
+        "/mic/two", adapter=None, language="zh-CN", kws_cfg={},
+        node_suffix="two")
+    first._record_transport("received", 1024)
+    first._record_transport("enqueued", 1024)
+    second._record_transport("received", 1024)
+    second._record_transport("queue_dropped", 1024)
+    plugin._nodes = {"one": first, "two": second}
+
+    instance = plugin.dispatch(
+        "asr", {"action": "info", "instance_id": "one"})
+    aggregate = plugin.dispatch("asr", {"action": "info"})
+
+    assert instance["transport"]["received_chunks"] == 1
+    assert instance["transport"]["enqueued_chunks"] == 1
+    assert aggregate["transport"]["received_chunks"] == 2
+    assert aggregate["transport"]["queue_dropped_chunks"] == 1
 
 
 # ── 冷启动：加载中也必须报出 topic ───────────────────────────────────────────

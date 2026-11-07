@@ -285,6 +285,8 @@ def test_unstamped_audio_chunk_uses_arrival_time_without_trusting_capture_clock(
     queued = []
     node._pcm_queue = SimpleNamespace(put_nowait=queued.append)
     node._check_audio_contract = lambda fmt, data: data
+    node._transport_lock = asr.threading.Lock()
+    node._reset_transport_stats()
     monkeypatch.setattr(asr.time, 'time', lambda: 1700000000.25)
     msg = SimpleNamespace(format='audio/pcm-16k', data=b'\0\0',
         header=SimpleNamespace(stamp=SimpleNamespace(sec=0, nanosec=0)))
@@ -292,6 +294,33 @@ def test_unstamped_audio_chunk_uses_arrival_time_without_trusting_capture_clock(
     node._audio_cb(msg)
 
     assert queued == [(b'\0\0', 1700000000.25, False)]
+    assert node._transport_stats() == {
+        'received_chunks': 1, 'received_bytes': 2,
+        'enqueued_chunks': 1, 'enqueued_bytes': 2,
+        'queue_dropped_chunks': 0, 'queue_dropped_bytes': 0,
+        'rejected_chunks': 0, 'rejected_bytes': 0,
+    }
+
+
+def test_audio_callback_counts_bounded_vad_queue_drops():
+    class FullQueue:
+        def put_nowait(self, item):
+            raise RuntimeError("full")
+
+    node = asr._ASRNode(
+        "/eval/audio", adapter=None, language="zh-CN", kws_cfg={})
+    node._pcm_queue = FullQueue()
+    msg = SimpleNamespace(format='audio/pcm-16k', data=b'\0' * 1024,
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=1700000000, nanosec=0)))
+
+    node._audio_cb(msg)
+
+    stats = node._transport_stats()
+    assert stats['received_chunks'] == 1
+    assert stats['enqueued_chunks'] == 0
+    assert stats['queue_dropped_chunks'] == 1
+    assert stats['queue_dropped_bytes'] == 1024
 
 
 def test_timestamp_trust_covers_each_vad_segment_including_early_speech(monkeypatch):
