@@ -1,0 +1,2 @@
+sherpa-onnx==1.13.6
+pypinyin>=0.55,<1

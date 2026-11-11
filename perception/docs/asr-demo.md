@@ -1,11 +1,14 @@
 # 中文机器人 ASR Demo
 
 这个分支保留 PhanthyMotus 的 ROS2/MCP 接口，并增加一个严格小于榜单资源上限的
-中文模型候选与可复现实验工具。面试交付不包含网站；演示方式是音频回放、终端结果、
-评测报告和录屏。
+中文模型候选与可复现实验工具。面试 Demo 现在同时支持本地麦克风实时页面、音频回放、
+终端结果和评测报告；页面用于展示机器人场景里的唤醒路由，不取代生产 ROS2 接口。
 
 2026-11-07 的自录数据、Mac 开发基线、实验边界和后续计划见
 [`asr-evaluation-report.md`](asr-evaluation-report.md)。
+
+本地实时 Demo 已于 2026-11-11 完成录制。视频作为独立交付物发送，不提交到 Git；
+仓库只保留可复现代码、测试和技术报告。
 
 ## 模型策略
 
@@ -50,6 +53,43 @@ python3 perception/tools/asr_recorder/server.py
 
 前 10 条是调试集，后 20 条是固定测试集。详细说明见
 `perception/tools/asr_recorder/README.md`。
+
+## 本地麦克风实时 Demo
+
+实时 Demo 会持续读取浏览器麦克风，在前端重采样为 16 kHz 单声道 PCM16，并切成严格
+的 1024-byte/32 ms 分块。后端保持同一个 VAD 会话，检测到句尾后立即调用真实 ASR，
+再把结果分成三种机器人状态：
+
+- 没有唤醒词：`background`，不发送给 core；
+- 唤醒词后还有任务：去掉唤醒词，显示 `CORE 指令`；
+- 只有唤醒词：`wake_only`，不发送空任务。
+
+默认配置“小范小范”同时接受“小范”和“小范小范”，并按最长形式优先匹配。因此
+“小范小范请前进”会完整去掉两个“小范”，不会把第二个“小范”误发给 core。
+如果一句只包含唤醒词，系统会进入 10 秒等待任务窗口；窗口内下一条非空语句无需再次
+唤醒，直接作为 core 任务，随后窗口自动关闭。超时后的语句仍归入 `background`。
+页面会用本地文字策略回复“在呢，需要我做什么吗？”并在收到任务后显示确认文字；
+该层不启动 TTS、不调用云端模型，也不宣称机器人已经执行动作。真实 agent-core/LLM
+接入点保留在 `assistant_reply` 字段。
+
+安装和启动：
+
+```bash
+source .venv/bin/activate
+python -m pip install -r perception/tools/asr_live/requirements.txt
+
+SSL_CERT_FILE=/etc/ssl/cert.pem .venv/bin/python \
+  perception/tools/asr_live/server.py \
+  --model-dir "$HOME/Library/Caches/robot-asr/models/zipformer-zh-14m"
+```
+
+用 Chrome 打开 `http://127.0.0.1:8766`，点击“开始实时识别”并允许麦克风权限。页面只
+连接 `127.0.0.1`，音频不会保存或上传。浏览器为降低 HTTP 开销可以一次发送多个块，
+但后端仍逐个校验和处理每个 1024-byte 分块。
+
+这个 Demo 是连续收音、VAD 句尾出结果，不是边说边显示文字的 partial transcript。
+Mac 路由使用规范化文本和拼音模糊匹配；生产插件仍使用 IPA 匹配。完整说明见
+`perception/tools/asr_live/README.md`。
 
 ## 本机可做的检查
 
@@ -160,9 +200,10 @@ SSL_CERT_FILE=/etc/ssl/cert.pem .venv/bin/python \
 额外的空文本段。结果仍不包含 ROS2 topic/队列和 Jetson 资源占用；这些必须在真机
 另行验证。
 
-## Jetson ROS2 与资源验收
+## Jetson ROS2 与资源验收（本次面试 Demo 不要求实机）
 
-下一阶段工具已经就绪，但当前仓库中的报告尚无 Jetson 实测数字。模型常驻内存的
+面试官已确认本次可直接在 Mac 上演示，不要求连接 Jetson 实机或提交榜单。以下工具
+仍作为未来正式榜单验收能力保留，但当前仓库中的报告没有伪造板端数字。模型常驻内存的
 正式对照需要保持其他服务不变、仅禁用 ASR 采集一次系统空闲，再用
 `zipformer-zh-14m`/CPU 配置干净重启 perception 并等待预热。ROS 验收还要设置
 `trigger_mode=vad`，随后在 perception/ROS2 环境内使用隔离输入 topic 回放：

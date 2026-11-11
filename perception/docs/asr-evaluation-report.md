@@ -1,7 +1,9 @@
 # 中文机器人 ASR Demo 技术报告
 
-> 报告状态：Mac 基线完成；ROS2/Jetson 验收工具已就绪，板端数据待采集
-> 数据与实验日期：2026-11-07  
+> 报告状态：Mac 基线、本地实时 Demo 与演示视频已完成；本次面试不要求 Jetson 实机<br>
+> 数据集与批量实验日期：2026-11-07<br>
+> 实时服务冒烟测试：2026-11-10<br>
+> Demo 录制日期：2026-11-11（视频单独提交，不纳入 Git）<br>
 > 当前分支：`codex/asr-demo`
 
 ## 1. 摘要
@@ -11,15 +13,22 @@
 评测链路。
 
 当前版本新增了紧凑型 `zipformer-zh-14m` 中文模型适配、本地录音采集页面、
-音频格式校验、批量转写，以及 1024-byte 实时分块的 VAD/ASR 全链路评测。在
+本地麦克风实时识别页面、音频格式校验、批量转写，以及 1024-byte 实时分块的
+VAD/ASR 全链路评测。在
 30 条自录中文机器人指令上，Mac CPU 环境的模型直接解码基线为：整体 CER
 `16.41%`，RTF `0.0303`；实时分块全链路为：整体 CER `16.11%`、主动处理 RTF
 `0.0618`、端点延迟 P50/P95 `557/667 ms`。
 
+实时页面进一步把 ASR 放入机器人交互上下文：未唤醒语音归入 `background`；单独说出
+“小范”或“小范小范”只开启一次性任务窗口；同句任务或窗口内下一句任务才成为
+`core` 候选。页面用本地确定性文字策略显示唤醒应答和任务接收确认，以便演示交互
+闭环，但不调用 LLM/TTS，也不宣称实体机器人已经执行动作。
+
 这些数字是开发阶段基线。全链路数字包含 WAV 分块、VAD、尾段 flush 和 ASR，
 但仍不包含 ROS2 传输以及 Jetson 资源占用，不应当作榜单或 Jetson 正式结论。
-下一阶段所需的真实 ROS2 回放、订阅/队列计数和 `tegrastats` 三态对比工具已经实现；
-本报告不会在没有 Jetson 真机运行记录时填入推测数字。
+未来正式榜单所需的真实 ROS2 回放、订阅/队列计数和 `tegrastats` 三态对比工具已经
+实现；面试官已确认本次 Demo 可在 Mac 完成，不要求连接 Jetson。本报告不会在没有
+真机运行记录时填入推测数字。
 
 ## 2. 场景与资源约束
 
@@ -51,13 +60,17 @@ VAD 语音检测与分句
         ↓
 中文 ASR 解码
         ↓
-唤醒词判断与结果整理
-        ↓
-ROS2 文本结果 → core 层
+唤醒词匹配与一次性任务窗口
+        ├── background：不发送任务，不回复
+        ├── wake_only：本地文字应答，等待下一句
+        └── core 候选：任务文本 + 本地接收确认
+                              ↓
+                  生产环境 ROS2 文本结果 → core 层
 ```
 
-Mac 阶段已验证“WAV 格式检查 → 1024-byte 实时分块 → VAD 分句/尾段 flush →
-ASR → 文本与评测结果”。下一阶段工具会把完全相同的数据改为真实
+Mac 阶段已验证“WAV/浏览器麦克风 → 1024-byte 实时分块 → VAD 分句/尾段 flush →
+ASR → 唤醒路由/文本与评测结果”。本地实时页面会把有唤醒词的任务标为 `core`，把
+未唤醒对话标为 `background`。未来榜单工具会把完全相同的数据改为真实
 `audio_msgs/AudioChunk` 发布，订阅生产 ASR 的两个文本 topic，并从 ASR `info`
 读取接收、入队、队列丢弃和拒绝计数；该阶段仍需在 Jetson 上实际执行。
 
@@ -68,6 +81,9 @@ ASR → 文本与评测结果”。下一阶段工具会把完全相同的数据
 | 紧凑中文模型 | 新增 `zipformer-zh-14m` CPU INT8 适配，保留上游 `sensevoice-small` 默认值 |
 | 模型下载 | 模型保存在仓库外，支持用 `ASR_ZIPFORMER_ZH_14M_URL` 切换内网地址 |
 | 本地录音 | 浏览器采集麦克风，前端重采样并编码为 16 kHz 单声道 PCM16 WAV |
+| 实时麦克风 Demo | 连续收音、1024-byte 分块、状态化 VAD、ASR 和 core/background 路由可视化 |
+| 唤醒状态机 | 单次/双次“小范”最长优先匹配，支持 10 秒一次性任务窗口和超时回落 |
+| 文字确认层 | `wake_only` 显示唤醒应答，任务路由显示接收确认；不调用 LLM 或 TTS |
 | 数据清单 | 保存 WAV 时同步维护 `manifest.jsonl` 和 `records.json` |
 | 数据校验 | 检查采样率、声道、采样宽度、文件是否存在和清单是否可读 |
 | 批量识别 | 对固定 manifest 批量输出逐条 JSONL 预测 |
@@ -85,7 +101,9 @@ ASR → 文本与评测结果”。下一阶段工具会把完全相同的数据
 - `perception/tools/asr_ros2_eval.py`
 - `perception/tools/jetson_resources.py`
 - `perception/tools/asr_recorder/`
+- `perception/tools/asr_live/`
 - `perception/tests/test_asr_eval.py`
+- `perception/tests/test_asr_live.py`
 - `perception/tests/test_asr_recorder.py`
 - `perception/tests/test_asr_device_registry.py`
 
@@ -281,6 +299,40 @@ flush 窗口 2 秒，VAD 闭合后立即停止。
 | 系统空闲/模型加载/回放三态资源 | 已实现 | 待 Jetson |
 | GPU P95 与最大值是否低于 10% | 自动判定 | 待 Jetson |
 
+### 8.5 本地麦克风实时 Demo
+
+实时页面持续采集浏览器麦克风，必要时重采样为 16 kHz 单声道 PCM16，再按
+1024 bytes/32 ms 切块。后端保持一个状态化 VAD 会话，并在句尾调用同一个
+`zipformer-zh-14m` 适配器。页面展示原始 ASR、唤醒匹配方式、去除唤醒词后的任务、
+core/background 路由、分块数、分句数、解码耗时和估算句尾延迟。
+
+2026-11-10 的服务级冒烟测试把自录 `dev-001` 按真实时间节奏送入该接口，VAD 产生
+1 个分句，ASR 输出“小范小范抢相前走一步”，精确命中唤醒词并路由到 core，模型
+解码约 `189 ms`。这项记录验证实时服务接口、VAD、ASR 和路由能够连通。2026-11-11
+已完成浏览器麦克风现场演示视频录制；视频作为独立交付物发送，不放入 Git 仓库，也不
+替代上面的固定数据集指标。
+
+Demo 使用本地 HTTP，不冒充 ROS2；`core` 是路由结果展示，不会直接控制机器人。
+拼音模糊匹配用于容忍“小范/小贩/小凡”等同音识别，生产插件则使用 IPA 匹配。
+本地路由同时接受单次“小范”和双次“小范小范”，按最长形式优先剥离唤醒词。
+仅说唤醒词时会保留 10 秒的一次性任务窗口；窗口内下一条非空语句进入 core，消费后
+自动关闭，超时语句回到 background。
+Demo 另有不依赖 TTS 的本地文字确认层，通过 `assistant_reply` 展示唤醒应答和任务接收
+结果。该层明确记录为 `local_dialogue_policy`，不冒充真实 LLM 或机器人动作执行。
+
+| 用户语音与状态 | 页面路由 | 页面文字回复 | 含义 |
+| --- | --- | --- | --- |
+| 未包含唤醒词 | `background` | 无 | 背景语音不进入 core |
+| 只说“小范”或“小范小范” | `wake_only` | 在呢，需要我做什么吗？ | 只确认唤醒，开启 10 秒任务窗口 |
+| 唤醒词与任务在同一句 | `core` | 好的，已收到任务：…… | 形成 core 候选任务 |
+| 唤醒后 10 秒内说下一句任务 | `core`（reason=`deferred_command`） | 好的，已收到任务：…… | 一次性消费任务窗口，之后自动关闭 |
+| 唤醒超时后再说任务 | `background` | 无 | 防止旧唤醒状态持续接收背景指令 |
+
+“已收到任务”只确认 perception 层完成了识别和路由判断；Mac Demo 并没有调用真实
+机器人 core，因此不能解释为动作执行成功。当前策略会移除任务开头的“请”，再生成
+确定性的确认文字。未来接入 agent-core/LLM 时，可以替换 `assistant_reply` 的来源，
+而不改动麦克风、1024-byte 分块、VAD、ASR 和唤醒状态机。
+
 ## 9. 复现步骤
 
 录音、模型和预测文件默认保存在仓库外。以本地默认数据目录为例：
@@ -315,7 +367,13 @@ SSL_CERT_FILE=/etc/ssl/cert.pem .venv/bin/python \
   --num-threads 4 \
   --realtime
 
-# 5. 检查 Git 提交是否存在超大文件
+# 5. 启动本地麦克风实时 Demo，再用 Chrome 打开 http://127.0.0.1:8766
+python -m pip install -r perception/tools/asr_live/requirements.txt
+SSL_CERT_FILE=/etc/ssl/cert.pem .venv/bin/python \
+  perception/tools/asr_live/server.py \
+  --model-dir "$HOME/Library/Caches/robot-asr/models/zipformer-zh-14m"
+
+# 6. 检查 Git 提交是否存在超大文件
 python perception/tools/asr_eval.py check-submission
 ```
 
@@ -403,15 +461,22 @@ GPU 约束同时报告 P95 和最大值；任一项达到或超过 10% 时命令
 5. Jetson 的 GPU、CPU、内存占用和冷启动耗时尚未实测；资源工具已覆盖稳态三态，
    冷启动耗时仍需结合 perception 日志单独记录。
 6. 唤醒命中率是严格字符前缀诊断，不是生产 IPA 模糊匹配的端到端命中率。
+7. 本地实时 Demo 在 VAD 句尾后输出完整转写，目前不提供边说边显示的 partial 文本；
+   本地 `core` 路由也不经过 ROS2 或真实机器人 core。
+8. 页面回复来自本地确定性策略，不具备开放域对话、任务规划或执行结果查询能力；当前
+   版本也没有 TTS 音频输出。
 
-## 11. 下一阶段
+## 11. 交付与下一阶段
 
-1. 只使用开发集选择 VAD 和唤醒词参数；参数固定后才重跑测试集。
-2. 在 Jetson Orin 8G 上运行已提供的真实 ROS2 回放，保存报告并确认生产队列零丢块。
-3. 运行 `tegrastats` 三态采集，填写 GPU、CPU、内存结果，并从 perception 日志补记
-   冷启动耗时。
-4. 单独评测生产 IPA 模糊唤醒命中率，不用后处理覆盖原始 ASR CER。
-5. 扩大说话人、方言、距离和机器人本体噪声数据，再录制最终演示视频。
+1. 面试交付包含公开代码仓库、固定 commit ID、技术报告和独立 Demo 视频；模型、录音、
+   预测结果及视频均不提交到 Git。
+2. 提交前运行测试和大文件检查，并确认邮件中的仓库地址、分支与 commit ID 指向同一
+   份代码。
+3. 后续调优只使用开发集选择 VAD 和唤醒词参数；参数固定后再重跑测试集。
+4. 扩大说话人、方言、距离和机器人本体噪声数据，并单独评测唤醒命中率与任务 CER。
+5. 如果未来参加正式榜单，再在 Jetson 上运行现有 ROS2 回放与 `tegrastats` 三态采集。
+6. 如果需要完整人机对话，再接入 agent-core/LLM 与 TTS；该扩展不应改变 ASR 原始
+   CER、端点延迟和资源占用的独立评测口径。
 
 ## 12. 代码与实验记录
 
@@ -419,6 +484,9 @@ GPU 约束同时报告 P95 和最大值；任一项达到或超过 10% 时命令
 | --- | --- |
 | `d225625` | 增加紧凑中文 ASR Demo 和评测工具 |
 | `74454bc` | 增加本地录音采集网页与数据保存 |
+| `49f5cc2` | 增加 Mac 基线评测报告 |
+| `5aa2ad5` | 增加 1024-byte VAD/ASR 全链路与 ROS2/Jetson 验收工具 |
 
 本报告只记录已实际运行的数据。尚未运行的 SenseVoice 对照、Jetson 性能和
-ROS2 端到端结果均明确标记为待验证。
+ROS2 端到端结果均明确标记为待验证。本地实时页面及本次文档修改应在交付前形成新的
+固定 commit，并以该 commit 作为邮件中的最终版本。

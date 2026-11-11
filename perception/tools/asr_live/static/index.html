@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#07101d">
+  <title>Robot ASR Live</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="glow glow-one"></div>
+  <div class="glow glow-two"></div>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-wave" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        <div>
+          <p>EMBODIED PERCEPTION</p>
+          <h1>Robot ASR Live</h1>
+        </div>
+      </div>
+      <div id="server-status" class="status-pill"><span></span>正在连接模型服务</div>
+    </header>
+
+    <section class="intro">
+      <div>
+        <p class="eyebrow">本地麦克风 · 实时识别</p>
+        <h2>听见不等于执行，唤醒后才发送任务。</h2>
+        <p class="intro-copy">浏览器持续采集 16 kHz 单声道音频，每 1024 bytes 送入 VAD；句子结束后立即识别，并区分 core 指令与背景对话。</p>
+      </div>
+      <div class="contract">
+        <span>PCM16</span><span>16 kHz</span><span>32 ms/chunk</span><span>CPU ASR</span>
+      </div>
+    </section>
+
+    <section class="control-panel">
+      <label class="wake-field" for="wake-word">
+        <span>唤醒词（自动兼容单次 / 双次）</span>
+        <input id="wake-word" value="小范小范" autocomplete="off" spellcheck="false">
+      </label>
+      <div class="listen-control">
+        <div class="mic-wrap">
+          <div class="pulse pulse-one"></div>
+          <div class="pulse pulse-two"></div>
+          <button id="start-button" class="mic-button" type="button">开始实时识别</button>
+        </div>
+        <button id="stop-button" class="stop-button" type="button" disabled>停止</button>
+      </div>
+      <div class="live-state">
+        <div class="state-row"><strong id="live-state">等待开始</strong><time id="timer">00:00.0</time></div>
+        <div class="level-track" aria-label="麦克风音量"><div id="level-fill"></div></div>
+        <p id="live-hint">点击开始后，请允许浏览器使用麦克风。</p>
+      </div>
+    </section>
+
+    <section class="pipeline" aria-label="实时识别流水线">
+      <div id="stage-input" class="stage"><span>01</span><div><strong>麦克风</strong><small>等待音频</small></div></div>
+      <b>→</b>
+      <div id="stage-vad" class="stage"><span>02</span><div><strong>VAD</strong><small>等待语音</small></div></div>
+      <b>→</b>
+      <div id="stage-asr" class="stage"><span>03</span><div><strong>ASR</strong><small>等待分句</small></div></div>
+      <b>→</b>
+      <div id="stage-route" class="stage"><span>04</span><div><strong>路由</strong><small>等待结果</small></div></div>
+    </section>
+
+    <section class="metrics" aria-label="实时统计">
+      <article><span>音频分块</span><strong id="metric-chunks">0</strong><small>1024 bytes/块</small></article>
+      <article><span>采集时长</span><strong id="metric-duration">0.0s</strong><small>连续麦克风输入</small></article>
+      <article><span>VAD 分句</span><strong id="metric-segments">0</strong><small>完整语音段</small></article>
+      <article><span>当前路由</span><strong id="metric-route">—</strong><small>core / background</small></article>
+    </section>
+
+    <section class="result-grid">
+      <article class="result-card latest">
+        <div class="section-heading">
+          <div><p class="eyebrow">LATEST UTTERANCE</p><h3>最新识别</h3></div>
+          <span id="route-badge" class="route-badge idle">等待语音</span>
+        </div>
+        <dl>
+          <div><dt>ASR 原文</dt><dd id="raw-text">—</dd></div>
+          <div><dt>唤醒判断</dt><dd id="wake-result">—</dd></div>
+          <div><dt>任务文本</dt><dd id="command-text">—</dd></div>
+          <div><dt>机器人回复</dt><dd id="assistant-reply">—</dd></div>
+        </dl>
+        <div class="latency-row">
+          <span>模型解码 <strong id="decode-ms">—</strong></span>
+          <span>句尾响应 <strong id="endpoint-ms">—</strong></span>
+          <span>语音时长 <strong id="utterance-s">—</strong></span>
+        </div>
+      </article>
+
+      <article class="result-card history-card">
+        <div class="section-heading">
+          <div><p class="eyebrow">SESSION LOG</p><h3>本次会话</h3></div>
+          <button id="clear-button" type="button">清空</button>
+        </div>
+        <div id="history" class="history"><p class="empty">识别结果会按时间显示在这里。</p></div>
+      </article>
+    </section>
+
+    <footer>
+      <span id="matcher-note">正在读取唤醒匹配能力…</span>
+      <span>文字回复来自本地对话策略；未启动 TTS，也不会上传云端。</span>
+    </footer>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
